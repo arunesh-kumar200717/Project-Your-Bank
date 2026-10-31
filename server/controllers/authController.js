@@ -190,6 +190,12 @@ export const employeeLogin = async (req, res) => {
     });
   }
 
+  // Security blocks are held in memory by employee ID. A new valid manager
+  // login must not inherit a block left behind by a previous process/session.
+  if (isManagerRole(employee.role)) {
+    clearEmployeeBlock(employee.employeeId);
+  }
+
   const securityAssessment = evaluateLoginSecurity({
     employee,
     device,
