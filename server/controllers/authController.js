@@ -1,21 +1,42 @@
+**File: `server/controllers/authController.js`**
 
+```javascript
 import bcrypt from 'bcrypt';
 import { Employee } from '../models/Employee.js';
 import { LoginRequest } from '../models/LoginRequest.js';
 import { RiskScore } from '../models/RiskScore.js';
 import { RefreshToken } from '../models/RefreshToken.js';
-import { createOtpSession, deleteOtpSession, verifyOtpSession } from '../services/otpService.js';
-import { createLoginSession, getLoginSession, updateLoginSession, deleteLoginSession } from '../services/authSessionService.js';
+import {
+  createOtpSession,
+  deleteOtpSession,
+  verifyOtpSession
+} from '../services/otpService.js';
+import {
+  createLoginSession,
+  getLoginSession,
+  updateLoginSession,
+  deleteLoginSession
+} from '../services/authSessionService.js';
 import { sendOtpEmail } from '../services/emailService.js';
 import { evaluateLoginSecurity } from '../services/loginSecurity.js';
 import { calculateEmployeeRisk } from '../services/riskEngine.js';
 import { writeAuditLog } from '../services/auditService.js';
 import { createNotification } from '../services/notificationService.js';
 import { startRecordingSession } from '../services/recordingService.js';
-import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt.js';
-import { demoEmployees, demoLoginRequests } from '../services/demoStore.js';
+import {
+  signAccessToken,
+  signRefreshToken,
+  verifyRefreshToken
+} from '../utils/jwt.js';
+import {
+  demoEmployees,
+  demoLoginRequests
+} from '../services/demoStore.js';
 import { demoMode } from '../config/db.js';
-import { clearEmployeeBlock, isEmployeeBlocked } from '../services/securityEngine.js';
+import {
+  clearEmployeeBlock,
+  isEmployeeBlocked
+} from '../services/securityEngine.js';
 
 const mapEmployee = (employee) => ({
   id: employee._id,
@@ -33,13 +54,42 @@ const mapEmployee = (employee) => ({
 
 const parseUserAgent = (userAgent = '') => {
   const agent = String(userAgent);
-  const browser = /Edg\//.test(agent) ? 'Microsoft Edge' : /Chrome\//.test(agent) ? 'Google Chrome' : /Firefox\//.test(agent) ? 'Mozilla Firefox' : /Safari\//.test(agent) ? 'Safari' : 'Unknown Browser';
-  const os = /Windows NT/.test(agent) ? 'Windows' : /Mac OS X/.test(agent) ? 'macOS' : /Android/.test(agent) ? 'Android' : /iPhone|iPad/.test(agent) ? 'iOS' : 'Unknown OS';
-  const device = /Mobile|Android|iPhone|iPad/.test(agent) ? 'Mobile' : 'Desktop';
+
+  const browser = /Edg\//.test(agent)
+    ? 'Microsoft Edge'
+    : /Chrome\//.test(agent)
+      ? 'Google Chrome'
+      : /Firefox\//.test(agent)
+        ? 'Mozilla Firefox'
+        : /Safari\//.test(agent)
+          ? 'Safari'
+          : 'Unknown Browser';
+
+  const os = /Windows NT/.test(agent)
+    ? 'Windows'
+    : /Mac OS X/.test(agent)
+      ? 'macOS'
+      : /Android/.test(agent)
+        ? 'Android'
+        : /iPhone|iPad/.test(agent)
+          ? 'iOS'
+          : 'Unknown OS';
+
+  const device = /Mobile|Android|iPhone|iPad/.test(agent)
+    ? 'Mobile'
+    : 'Desktop';
+
   return { browser, os, device };
 };
 
-const issueTokens = async (employee, context, previousRefreshToken = null) => {
+const isManagerRole = (role) =>
+  String(role || '').trim().toLowerCase() === 'manager';
+
+const issueTokens = async (
+  employee,
+  context,
+  previousRefreshToken = null
+) => {
   const payload = {
     sub: employee._id.toString(),
     employeeId: employee.employeeId,
@@ -54,10 +104,14 @@ const issueTokens = async (employee, context, previousRefreshToken = null) => {
     return { accessToken, refreshToken };
   }
 
-  await RefreshToken.deleteMany({ employeeId: employee.employeeId });
+  await RefreshToken.deleteMany({
+    employeeId: employee.employeeId
+  });
 
   if (previousRefreshToken) {
-    await RefreshToken.deleteOne({ token: previousRefreshToken });
+    await RefreshToken.deleteOne({
+      token: previousRefreshToken
+    });
   }
 
   await RefreshToken.create({
@@ -87,7 +141,9 @@ export const employeeLogin = async (req, res) => {
   } = req.body;
 
   const employee = demoMode
-    ? demoEmployees.find((item) => item.employeeId === employeeId)
+    ? demoEmployees.find(
+        (item) => item.employeeId === employeeId
+      )
     : await Employee.findOne({ employeeId });
 
   if (!employee) {
@@ -105,10 +161,14 @@ export const employeeLogin = async (req, res) => {
   );
 
   const ipAddress =
-    req.body.ipAddress || req.ip || req.socket.remoteAddress || '';
+    req.body.ipAddress ||
+    req.ip ||
+    req.socket.remoteAddress ||
+    '';
 
   if (!valid) {
-    employee.failedLoginCount += 1;
+    employee.failedLoginCount =
+      (employee.failedLoginCount || 0) + 1;
 
     if (!demoMode) {
       await employee.save();
@@ -144,10 +204,12 @@ export const employeeLogin = async (req, res) => {
     vpnDetected
   });
 
-  // Managers do not require approval from another manager.
-  // Their password and OTP verification are still required.
-  const isManager =
-    String(employee.role).trim().toLowerCase() === 'manager';
+  // Managers bypass manager approval only.
+  // Password verification and OTP verification are still required.
+  const isManager = isManagerRole(employee.role);
+
+  const canLoginImmediately =
+    securityAssessment.allowImmediately || isManager;
 
   const loginSessionId = createLoginSession({
     employeeId: employee.employeeId,
@@ -160,10 +222,9 @@ export const employeeLogin = async (req, res) => {
     location,
     timezone,
     securityAssessment,
-    state:
-      securityAssessment.allowImmediately || isManager
-        ? 'OTP_PENDING'
-        : 'MANAGER_PENDING'
+    state: canLoginImmediately
+      ? 'OTP_PENDING'
+      : 'MANAGER_PENDING'
   });
 
   const { sessionId, otp } = await createOtpSession({
@@ -225,7 +286,10 @@ export const employeeLogin = async (req, res) => {
 export const verifyOtp = async (req, res) => {
   const { otpSessionId, otp } = req.body;
 
-  const verification = await verifyOtpSession(otpSessionId, otp);
+  const verification = await verifyOtpSession(
+    otpSessionId,
+    otp
+  );
 
   if (!verification.ok) {
     return res.status(400).json({
@@ -233,9 +297,10 @@ export const verifyOtp = async (req, res) => {
     });
   }
 
-  const session = getLoginSession(
-    verification.payload.loginSessionId
-  );
+  const loginSessionId =
+    verification.payload.loginSessionId;
+
+  const session = getLoginSession(loginSessionId);
 
   const employee = demoMode
     ? demoEmployees.find(
@@ -244,7 +309,8 @@ export const verifyOtp = async (req, res) => {
           verification.payload.employee.employeeId
       )
     : await Employee.findOne({
-        employeeId: verification.payload.employee.employeeId
+        employeeId:
+          verification.payload.employee.employeeId
       });
 
   if (!employee) {
@@ -257,10 +323,8 @@ export const verifyOtp = async (req, res) => {
   const securityAssessment =
     verification.payload.securityAssessment;
 
-  // Managers bypass only the manager-approval requirement.
-  // OTP and security assessment are still performed.
-  const isManager =
-    String(employee.role).trim().toLowerCase() === 'manager';
+  // Manager role bypasses approval, not security assessment or OTP.
+  const isManager = isManagerRole(employee.role);
 
   const canLoginImmediately =
     securityAssessment.allowImmediately || isManager;
@@ -332,8 +396,8 @@ export const verifyOtp = async (req, res) => {
       }
     });
 
-    // Delete the actual login session ID, not the OTP session ID.
-    deleteLoginSession(verification.payload.loginSessionId);
+    // Delete the correct login session.
+    deleteLoginSession(loginSessionId);
 
     return res.json({
       authenticated: true,
@@ -344,7 +408,7 @@ export const verifyOtp = async (req, res) => {
     });
   }
 
-  // Employees with unusual login activity still require manager approval.
+  // Only employees who need approval enter this branch.
   const loginRequest = demoMode
     ? {
         _id: `demo-${Date.now()}`,
@@ -366,8 +430,7 @@ export const verifyOtp = async (req, res) => {
         }).score,
         status: 'Pending',
         loginSessionId:
-          session?.sessionId ||
-          verification.payload.loginSessionId
+          session?.sessionId || loginSessionId
       }
     : await LoginRequest.create({
         employeeId: employee.employeeId,
@@ -388,8 +451,7 @@ export const verifyOtp = async (req, res) => {
         }).score,
         status: 'Pending',
         loginSessionId:
-          session?.sessionId ||
-          verification.payload.loginSessionId
+          session?.sessionId || loginSessionId
       });
 
   if (demoMode) {
@@ -434,7 +496,7 @@ export const verifyOtp = async (req, res) => {
     }
   });
 
-  deleteLoginSession(verification.payload.loginSessionId);
+  deleteLoginSession(loginSessionId);
 
   return res.json({
     authenticated: false,
@@ -667,3 +729,4 @@ export const me = async (req, res) => {
     employee: mapEmployee(employee)
   });
 };
+```
