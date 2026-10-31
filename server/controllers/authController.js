@@ -1,6 +1,3 @@
-**File: `server/controllers/authController.js`**
-
-```javascript
 import bcrypt from 'bcrypt';
 import { Employee } from '../models/Employee.js';
 import { LoginRequest } from '../models/LoginRequest.js';
@@ -330,6 +327,9 @@ export const verifyOtp = async (req, res) => {
     securityAssessment.allowImmediately || isManager;
 
   if (canLoginImmediately) {
+    // A successful new OTP verification starts a fresh authenticated session.
+    // Do not carry a previous in-memory forced-logout block into that session.
+    clearEmployeeBlock(employee.employeeId);
     const tokens = await issueTokens(employee, context);
 
     const risk = calculateEmployeeRisk({
@@ -542,6 +542,9 @@ export const finalizeLogin = async (req, res) => {
     });
   }
 
+  // Approval creates a fresh authenticated session as well.
+  clearEmployeeBlock(employee.employeeId);
+
   const tokens = await issueTokens(employee, {
     device: loginRequest.device,
     browser: loginRequest.browser,
@@ -729,4 +732,3 @@ export const me = async (req, res) => {
     employee: mapEmployee(employee)
   });
 };
-```

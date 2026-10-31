@@ -187,6 +187,7 @@ export const SecurityProvider = ({ children }) => {
 
   const previousPathRef = useRef(location.pathname);
   const lastEventRef = useRef(0);
+  const authenticatedEmployeeRef = useRef(null);
 
   useEffect(() => {
     writeJson(STORAGE_KEY, state);
@@ -194,17 +195,20 @@ export const SecurityProvider = ({ children }) => {
 
   useEffect(() => {
     if (!user) {
+      authenticatedEmployeeRef.current = null;
       setState(createInitialState());
       removeJson(STORAGE_KEY);
       return;
     }
 
-    const storedState = readJson(STORAGE_KEY, null);
-
-    if (!storedState) {
+    if (authenticatedEmployeeRef.current !== user.employeeId) {
+      authenticatedEmployeeRef.current = user.employeeId;
       setState(createInitialState());
+      previousPathRef.current = location.pathname;
+      lastEventRef.current = 0;
+      removeJson(STORAGE_KEY);
     }
-  }, [user]);
+  }, [location.pathname, user]);
 
   const updateFromPayload = useCallback((payload) => {
     if (!payload) return;
