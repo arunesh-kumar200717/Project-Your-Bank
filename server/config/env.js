@@ -58,12 +58,17 @@ export const env = {
     )
   ],
 
+  // Resend email configuration
+  RESEND_API_KEY: process.env.RESEND_API_KEY || '',
+
+  // SMTP configuration (preserved)
   SMTP_HOST: process.env.SMTP_HOST || '',
   SMTP_PORT: toNumber(process.env.SMTP_PORT, 587),
   SMTP_USER: process.env.SMTP_USER || '',
   SMTP_PASSWORD: process.env.SMTP_PASSWORD || '',
   SMTP_FROM: process.env.SMTP_FROM || '',
 
+  // Office configuration
   OFFICE_LATITUDE: toNumber(process.env.OFFICE_LATITUDE, 28.6139),
   OFFICE_LONGITUDE: toNumber(process.env.OFFICE_LONGITUDE, 77.209),
   OFFICE_RADIUS_KM: toNumber(process.env.OFFICE_RADIUS_KM, 0.75),
