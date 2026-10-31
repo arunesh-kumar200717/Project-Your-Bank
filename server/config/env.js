@@ -58,10 +58,11 @@ export const env = {
     )
   ],
 
-  // Resend email configuration
+  // Resend configuration
   RESEND_API_KEY: process.env.RESEND_API_KEY || '',
+  RESEND_FROM: process.env.RESEND_FROM || '',
 
-  // SMTP configuration (preserved)
+  // SMTP configuration
   SMTP_HOST: process.env.SMTP_HOST || '',
   SMTP_PORT: toNumber(process.env.SMTP_PORT, 587),
   SMTP_USER: process.env.SMTP_USER || '',
