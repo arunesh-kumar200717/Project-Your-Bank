@@ -1,3 +1,4 @@
+
 import bcrypt from 'bcrypt';
 import { Employee } from '../models/Employee.js';
 import { LoginRequest } from '../models/LoginRequest.js';
@@ -39,7 +40,13 @@ const parseUserAgent = (userAgent = '') => {
 };
 
 const issueTokens = async (employee, context, previousRefreshToken = null) => {
-  const payload = { sub: employee._id.toString(), employeeId: employee.employeeId, role: employee.role, name: employee.name };
+  const payload = {
+    sub: employee._id.toString(),
+    employeeId: employee.employeeId,
+    role: employee.role,
+    name: employee.name
+  };
+
   const accessToken = signAccessToken(payload);
   const refreshToken = signRefreshToken(payload);
 
@@ -70,22 +77,35 @@ const issueTokens = async (employee, context, previousRefreshToken = null) => {
 };
 
 export const employeeLogin = async (req, res) => {
-  const { employeeId, password, location = {}, currentTime, timezone, vpnDetected = false } = req.body;
+  const {
+    employeeId,
+    password,
+    location = {},
+    currentTime,
+    timezone,
+    vpnDetected = false
+  } = req.body;
 
   const employee = demoMode
     ? demoEmployees.find((item) => item.employeeId === employeeId)
     : await Employee.findOne({ employeeId });
 
   if (!employee) {
-    return res.status(401).json({ message: 'Invalid employee credentials' });
+    return res.status(401).json({
+      message: 'Invalid employee credentials'
+    });
   }
 
   const valid = demoMode
     ? password === 'Bank@123'
     : await bcrypt.compare(password, employee.passwordHash);
 
-  const { browser, os, device } = parseUserAgent(req.body.userAgent || req.headers['user-agent']);
-  const ipAddress = req.body.ipAddress || req.ip || req.socket.remoteAddress || '';
+  const { browser, os, device } = parseUserAgent(
+    req.body.userAgent || req.headers['user-agent']
+  );
+
+  const ipAddress =
+    req.body.ipAddress || req.ip || req.socket.remoteAddress || '';
 
   if (!valid) {
     employee.failedLoginCount += 1;
@@ -108,7 +128,9 @@ export const employeeLogin = async (req, res) => {
       metadata: { employeeId }
     });
 
-    return res.status(401).json({ message: 'Invalid employee credentials' });
+    return res.status(401).json({
+      message: 'Invalid employee credentials'
+    });
   }
 
   const securityAssessment = evaluateLoginSecurity({
@@ -122,6 +144,11 @@ export const employeeLogin = async (req, res) => {
     vpnDetected
   });
 
+  // Managers do not require approval from another manager.
+  // Their password and OTP verification are still required.
+  const isManager =
+    String(employee.role).trim().toLowerCase() === 'manager';
+
   const loginSessionId = createLoginSession({
     employeeId: employee.employeeId,
     employeeName: employee.name,
@@ -133,12 +160,22 @@ export const employeeLogin = async (req, res) => {
     location,
     timezone,
     securityAssessment,
-    state: securityAssessment.allowImmediately ? 'OTP_PENDING' : 'MANAGER_PENDING'
+    state:
+      securityAssessment.allowImmediately || isManager
+        ? 'OTP_PENDING'
+        : 'MANAGER_PENDING'
   });
 
   const { sessionId, otp } = await createOtpSession({
     employee: mapEmployee(employee),
-    context: { device, browser, os, ipAddress, location, timezone },
+    context: {
+      device,
+      browser,
+      os,
+      ipAddress,
+      location,
+      timezone
+    },
     securityAssessment,
     currentTime: currentTime || new Date().toISOString(),
     loginSessionId
@@ -165,15 +202,21 @@ export const employeeLogin = async (req, res) => {
     browser,
     os,
     location,
-    metadata: { securityAssessment, loginSessionId }
+    metadata: {
+      securityAssessment,
+      loginSessionId,
+      managerApprovalBypassed: isManager
+    }
   });
 
-  // Corrected merge conflict
   return res.json({
     otpSessionId: sessionId,
     loginSessionId,
     otpDelivery: demoMode ? 'simulated' : 'email',
-    demoOtp: demoMode && process.env.NODE_ENV !== 'production' ? otp : undefined,
+    demoOtp:
+      demoMode && process.env.NODE_ENV !== 'production'
+        ? otp
+        : undefined,
     securityAssessment,
     employee: mapEmployee(employee)
   });
@@ -181,28 +224,52 @@ export const employeeLogin = async (req, res) => {
 
 export const verifyOtp = async (req, res) => {
   const { otpSessionId, otp } = req.body;
+
   const verification = await verifyOtpSession(otpSessionId, otp);
 
   if (!verification.ok) {
-    return res.status(400).json({ message: verification.message });
+    return res.status(400).json({
+      message: verification.message
+    });
   }
 
-  const session = getLoginSession(verification.payload.loginSessionId);
+  const session = getLoginSession(
+    verification.payload.loginSessionId
+  );
 
   const employee = demoMode
-    ? demoEmployees.find((item) => item.employeeId === verification.payload.employee.employeeId)
-    : await Employee.findOne({ employeeId: verification.payload.employee.employeeId });
+    ? demoEmployees.find(
+        (item) =>
+          item.employeeId ===
+          verification.payload.employee.employeeId
+      )
+    : await Employee.findOne({
+        employeeId: verification.payload.employee.employeeId
+      });
 
   if (!employee) {
-    return res.status(404).json({ message: 'Employee not found' });
+    return res.status(404).json({
+      message: 'Employee not found'
+    });
   }
 
   const context = verification.payload.context;
+  const securityAssessment =
+    verification.payload.securityAssessment;
 
-  if (verification.payload.securityAssessment.allowImmediately) {
+  // Managers bypass only the manager-approval requirement.
+  // OTP and security assessment are still performed.
+  const isManager =
+    String(employee.role).trim().toLowerCase() === 'manager';
+
+  const canLoginImmediately =
+    securityAssessment.allowImmediately || isManager;
+
+  if (canLoginImmediately) {
     const tokens = await issueTokens(employee, context);
+
     const risk = calculateEmployeeRisk({
-      loginReasons: verification.payload.securityAssessment.reasons
+      loginReasons: securityAssessment.reasons
     });
 
     const riskRecord = demoMode
@@ -223,7 +290,7 @@ export const verifyOtp = async (req, res) => {
             level: risk.level,
             reasons: risk.reasons,
             suggestedAction: risk.suggestedAction,
-            recentSignals: verification.payload.securityAssessment.riskSignals,
+            recentSignals: securityAssessment.riskSignals,
             updatedAtSource: 'login'
           },
           { upsert: true, new: true }
@@ -233,7 +300,9 @@ export const verifyOtp = async (req, res) => {
       targetRole: employee.role,
       employeeId: employee.employeeId,
       title: 'Login verified',
-      message: 'Your login was verified with zero trust checks and OTP.',
+      message: isManager
+        ? 'Manager login verified successfully with OTP. Manager approval is not required.'
+        : 'Your login was verified with security checks and OTP.',
       type: 'success',
       priority: 'normal'
     });
@@ -256,10 +325,15 @@ export const verifyOtp = async (req, res) => {
       os: context.os,
       location: context.location,
       riskScore: riskRecord.score,
-      metadata: { allowImmediately: true }
+      metadata: {
+        allowImmediately: securityAssessment.allowImmediately,
+        managerApprovalBypassed: isManager,
+        securityReasons: securityAssessment.reasons
+      }
     });
 
-    deleteLoginSession(otpSessionId);
+    // Delete the actual login session ID, not the OTP session ID.
+    deleteLoginSession(verification.payload.loginSessionId);
 
     return res.json({
       authenticated: true,
@@ -270,47 +344,52 @@ export const verifyOtp = async (req, res) => {
     });
   }
 
+  // Employees with unusual login activity still require manager approval.
   const loginRequest = demoMode
     ? {
         _id: `demo-${Date.now()}`,
         employeeId: employee.employeeId,
         employeeName: employee.name,
-        reason: verification.payload.securityAssessment.reasons,
+        reason: securityAssessment.reasons,
         location: context.location,
         ipAddress: context.ipAddress,
         device: context.device,
         browser: context.browser,
         os: context.os,
         timezone: context.timezone,
-        officeMatch: verification.payload.securityAssessment.officeMatch,
-        timeWindowMatch: verification.payload.securityAssessment.timeWindowMatch,
-        deviceMatch: verification.payload.securityAssessment.deviceMatch,
-        browserMatch: verification.payload.securityAssessment.browserMatch,
+        officeMatch: securityAssessment.officeMatch,
+        timeWindowMatch: securityAssessment.timeWindowMatch,
+        deviceMatch: securityAssessment.deviceMatch,
+        browserMatch: securityAssessment.browserMatch,
         riskScore: calculateEmployeeRisk({
-          loginReasons: verification.payload.securityAssessment.reasons
+          loginReasons: securityAssessment.reasons
         }).score,
         status: 'Pending',
-        loginSessionId: session?.sessionId || verification.payload.loginSessionId
+        loginSessionId:
+          session?.sessionId ||
+          verification.payload.loginSessionId
       }
     : await LoginRequest.create({
         employeeId: employee.employeeId,
         employeeName: employee.name,
-        reason: verification.payload.securityAssessment.reasons,
+        reason: securityAssessment.reasons,
         location: context.location,
         ipAddress: context.ipAddress,
         device: context.device,
         browser: context.browser,
         os: context.os,
         timezone: context.timezone,
-        officeMatch: verification.payload.securityAssessment.officeMatch,
-        timeWindowMatch: verification.payload.securityAssessment.timeWindowMatch,
-        deviceMatch: verification.payload.securityAssessment.deviceMatch,
-        browserMatch: verification.payload.securityAssessment.browserMatch,
+        officeMatch: securityAssessment.officeMatch,
+        timeWindowMatch: securityAssessment.timeWindowMatch,
+        deviceMatch: securityAssessment.deviceMatch,
+        browserMatch: securityAssessment.browserMatch,
         riskScore: calculateEmployeeRisk({
-          loginReasons: verification.payload.securityAssessment.reasons
+          loginReasons: securityAssessment.reasons
         }).score,
         status: 'Pending',
-        loginSessionId: session?.sessionId || verification.payload.loginSessionId
+        loginSessionId:
+          session?.sessionId ||
+          verification.payload.loginSessionId
       });
 
   if (demoMode) {
@@ -333,7 +412,9 @@ export const verifyOtp = async (req, res) => {
     message: `${employee.name} requires manager approval to continue.`,
     type: 'warning',
     priority: 'high',
-    metadata: { loginRequestId: loginRequest._id.toString() }
+    metadata: {
+      loginRequestId: loginRequest._id.toString()
+    }
   });
 
   await writeAuditLog({
@@ -349,17 +430,17 @@ export const verifyOtp = async (req, res) => {
     location: context.location,
     metadata: {
       loginRequestId: loginRequest._id.toString(),
-      reasons: verification.payload.securityAssessment.reasons
+      reasons: securityAssessment.reasons
     }
   });
 
-  deleteLoginSession(otpSessionId);
+  deleteLoginSession(verification.payload.loginSessionId);
 
   return res.json({
     authenticated: false,
     requiresManagerApproval: true,
     loginRequestId: loginRequest._id,
-    reasons: verification.payload.securityAssessment.reasons,
+    reasons: securityAssessment.reasons,
     employee: mapEmployee(employee)
   });
 };
@@ -368,23 +449,35 @@ export const finalizeLogin = async (req, res) => {
   const { loginRequestId } = req.params;
 
   const loginRequest = demoMode
-    ? demoLoginRequests.find((item) => item._id === loginRequestId)
+    ? demoLoginRequests.find(
+        (item) => item._id === loginRequestId
+      )
     : await LoginRequest.findById(loginRequestId);
 
   if (!loginRequest) {
-    return res.status(404).json({ message: 'Login request not found' });
+    return res.status(404).json({
+      message: 'Login request not found'
+    });
   }
 
   if (loginRequest.status !== 'Approved') {
-    return res.status(409).json({ message: 'Manager approval pending' });
+    return res.status(409).json({
+      message: 'Manager approval pending'
+    });
   }
 
   const employee = demoMode
-    ? demoEmployees.find((item) => item.employeeId === loginRequest.employeeId)
-    : await Employee.findOne({ employeeId: loginRequest.employeeId });
+    ? demoEmployees.find(
+        (item) => item.employeeId === loginRequest.employeeId
+      )
+    : await Employee.findOne({
+        employeeId: loginRequest.employeeId
+      });
 
   if (!employee) {
-    return res.status(404).json({ message: 'Employee not found' });
+    return res.status(404).json({
+      message: 'Employee not found'
+    });
   }
 
   const tokens = await issueTokens(employee, {
@@ -395,7 +488,9 @@ export const finalizeLogin = async (req, res) => {
     location: loginRequest.location
   });
 
-  const risk = calculateEmployeeRisk({ loginReasons: loginRequest.reason });
+  const risk = calculateEmployeeRisk({
+    loginReasons: loginRequest.reason
+  });
 
   const riskRecord = demoMode
     ? {
@@ -455,7 +550,9 @@ export const refreshToken = async (req, res) => {
   const { refreshToken } = req.body;
 
   if (!refreshToken) {
-    return res.status(400).json({ message: 'Refresh token required' });
+    return res.status(400).json({
+      message: 'Refresh token required'
+    });
   }
 
   let employee;
@@ -463,22 +560,35 @@ export const refreshToken = async (req, res) => {
   if (demoMode) {
     try {
       const payload = verifyRefreshToken(refreshToken);
-      employee = demoEmployees.find((item) => item.employeeId === payload.employeeId);
+
+      employee = demoEmployees.find(
+        (item) => item.employeeId === payload.employeeId
+      );
     } catch {
-      return res.status(401).json({ message: 'Invalid or expired refresh token' });
+      return res.status(401).json({
+        message: 'Invalid or expired refresh token'
+      });
     }
   } else {
-    const stored = await RefreshToken.findOne({ token: refreshToken });
+    const stored = await RefreshToken.findOne({
+      token: refreshToken
+    });
 
     if (!stored) {
-      return res.status(401).json({ message: 'Refresh token not recognized' });
+      return res.status(401).json({
+        message: 'Refresh token not recognized'
+      });
     }
 
-    employee = await Employee.findOne({ employeeId: stored.employeeId });
+    employee = await Employee.findOne({
+      employeeId: stored.employeeId
+    });
   }
 
   if (!employee) {
-    return res.status(404).json({ message: 'Employee not found' });
+    return res.status(404).json({
+      message: 'Employee not found'
+    });
   }
 
   if (isEmployeeBlocked(employee.employeeId)) {
@@ -505,7 +615,9 @@ export const logout = async (req, res) => {
   const { refreshToken, recordingId } = req.body;
 
   if (refreshToken) {
-    await RefreshToken.deleteOne({ token: refreshToken });
+    await RefreshToken.deleteOne({
+      token: refreshToken
+    });
   }
 
   if (req.user?.employeeId) {
@@ -515,7 +627,9 @@ export const logout = async (req, res) => {
       actorId: req.user.employeeId,
       actorRole: req.user.role,
       employeeName: req.user.name,
-      action: req.body?.reason ? 'Security Policy Logout' : 'Employee Logout',
+      action: req.body?.reason
+        ? 'Security Policy Logout'
+        : 'Employee Logout',
       module: 'Authentication',
       riskScore: Number(req.body?.securityScore || 0),
       metadata: {
@@ -526,19 +640,30 @@ export const logout = async (req, res) => {
   }
 
   if (recordingId) {
-    const { stopRecordingSession } = await import('../services/recordingService.js');
+    const { stopRecordingSession } = await import(
+      '../services/recordingService.js'
+    );
+
     await stopRecordingSession(recordingId);
   }
 
-  return res.json({ message: 'Logged out successfully' });
+  return res.json({
+    message: 'Logged out successfully'
+  });
 };
 
 export const me = async (req, res) => {
-  const employee = await Employee.findOne({ employeeId: req.user.employeeId });
+  const employee = await Employee.findOne({
+    employeeId: req.user.employeeId
+  });
 
   if (!employee) {
-    return res.status(404).json({ message: 'Employee not found' });
+    return res.status(404).json({
+      message: 'Employee not found'
+    });
   }
 
-  return res.json({ employee: mapEmployee(employee) });
+  return res.json({
+    employee: mapEmployee(employee)
+  });
 };
